@@ -1,0 +1,391 @@
+---
+title: "5200 Kaggle"
+author: "Keqi Yu"
+date: "29/10/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(data.table)
+```
+
+```{r}
+analysis <- read.csv("analysisData.csv")
+scoring <- read.csv("scoringData.csv")
+```
+
+
+```{r}
+#remove variables with high rate of missing value
+round(apply(is.na(analysis), 2, sum)/41330, 2)*100
+missvar <- c("square_feet", "weekly_price", "monthly_price", "security_deposit", "cleaning_fee", "license","jurisdiction_names")
+analysis <- select(analysis,-missvar)
+scoring <- select(scoring,-missvar)
+```
+
+```{r}
+source("data_manipulation_functions.R")
+analysis_new <- analysis %>% mutate_all(to_factor_from_numeric)
+scoring_new <- scoring %>% mutate_all(to_factor_from_numeric)
+```
+
+```{r}
+str(analysis_new)
+analysis_new %>% select_if(~any(is.na(.)))
+```
+
+
+```{r}
+analysis_new$beds[is.na(analysis_new$beds)] <- mean(analysis_new$beds,na.rm=TRUE)
+analysis_new$host_listings_count[is.na(analysis_new$host_listings_count)] <- 
+  mean(analysis_new$host_listings_count,na.rm=TRUE)
+analysis_new$host_total_listings_count[is.na(analysis_new$host_total_listings_count)] <- 
+  mean(analysis_new$host_total_listings_count,na.rm=TRUE)
+analysis_new <- analysis_new %>% select_if(~!any(is.na(.)))
+
+scoring_new$beds[is.na(scoring_new$beds)] <- mean(scoring_new$beds,na.rm=TRUE)
+scoring_new$host_listings_count[is.na(scoring_new$host_listings_count)] <- 
+  mean(scoring_new$host_listings_count,na.rm=TRUE)
+scoring_new$host_total_listings_count[is.na(scoring_new$host_total_listings_count)] <- 
+  mean(scoring_new$host_total_listings_count,na.rm=TRUE)
+scoring_new <- scoring_new %>% select_if(~!any(is.na(.)))
+```
+
+```{r}
+str(analysis_new)
+```
+
+
+##Useful data
+```{r}
+useful <- c("host_is_superhost","host_has_profile_pic",
+            "host_identity_verified","neighbourhood_group_cleansed",
+            names(analysis_new)[39:43], names(analysis_new)[45:55], 
+            names(analysis_new)[58:63], names(analysis_new)[66:72],
+            "instant_bookable", names(analysis_new)[76:82])
+data <- analysis_new[,useful]
+```
+
+```{r}
+for (i in 1:ncol(data)){
+  if ("t" %in% data[,i] | "f" %in% data[,i]| "" %in% data[,i]){
+    data[,i] <- as.character(data[,i])
+    data[which(data[,i]=="f"),i] <- 0
+    data[which(data[,i]=="t"),i] <- 1
+    data[which(data[,i]==""),i] <- NA
+    data[,i] <- as.factor(data[,i])
+  }
+}
+```
+
+```{r}
+str(data)
+data <- na.omit(data)
+data %>% select_if(~any(is.na(.)))
+```
+
+
+
+```{r}
+##Deal with scoring data
+library(tibble)
+variables.select <- colnames(data)
+variables.select <- variables.select[-which(variables.select=="price")]
+data1 <- scoring_new[,variables.select]
+
+# Change the value of columns which are categorical
+for (i in 1:ncol(data1)){
+  if ("t" %in% data1[,i] | "f" %in% data1[,i]| "" %in% data1[,i]){
+    data1[,i] <- as.character(data1[,i])
+    data1[which(data1[,i]=="f"),i] <- "0"
+    data1[which(data1[,i]=="t"),i] <- "1"
+    data1[which(data1[,i]==""),i] <- NA
+    data1[,i] <- as.factor(data1[,i])
+  }
+}
+```
+
+```{r}
+str(data1)
+data1 %>% select_if(~any(is.na(.)))
+data1$host_is_superhost[is.na(data1$host_is_superhost)] <- "0"
+data1$host_has_profile_pic[is.na(data1$host_has_profile_pic)] <- "1"
+data1$host_identity_verified[is.na(data1$host_identity_verified)] <- "0"
+data1 %>% select_if(~any(is.na(.)))
+```
+
+
+
+```{r}
+library(caret)
+set.seed(0828)
+split = createDataPartition(y= data$price,p = 0.8,list = F,groups = 100)
+train = data[split,]
+test =  data[-split,]
+```
+
+```{r}
+str(train)
+```
+
+
+#linear regression
+
+```{r}
+modellm <- lm(price~.,data = train)
+pred_train_lm = predict(modellm, newdata = train)
+rmse_train_lm = sqrt(mean((pred_train_lm - train$price)^2)); rmse_train_lm
+
+pred_test_lm = predict(modellm, newdata=test)
+rmse_tree_lm = sqrt(mean((pred_test_lm - test$price)^2))
+rmse_tree_lm
+
+predlm = predict(modellm, newdata = data1)
+rmse_lm = sqrt(mean((predlm - train$price)^2))
+rmse_lm
+```
+
+```{r}
+submissionFile = data.frame(id = scoring$id, price = predlm)
+submissionFile %>% select_if(~any(is.na(.)))
+write.csv(submissionFile, 'sample_submissionlm.csv',row.names = F)
+```
+
+#tree model
+
+```{r}
+#install.packages("rpart.plot")
+library(rpart); library(rpart.plot)
+tree = rpart(price~.,data=train)
+
+pred_train_tree = predict(tree, newdata=train)
+rmse_train_xgboost = sqrt(mean((pred_train_tree - train$price)^2))
+rmse_train_xgboost
+
+pred_test_tree = predict(tree,newdata=test)
+rmse_test_tree = sqrt(mean((pred_test_tree - test$price)^2))
+rmse_test_tree
+
+predtree = predict(tree, newdata = data1)
+rmse_tree = sqrt(mean((predtree - train$price)^2)); rmse_tree
+```
+
+```{r}
+submissionFile = data.frame(id = scoring$id, price = predtree)
+write.csv(submissionFile, 'sample_submissiontree.csv',row.names = F)
+```
+
+##gbm
+
+```{r}
+#Data type conversion to numeric type
+datanum <- data
+num.index <- c(1:3,5:8,10:27,36:41)
+for (i in num.index){
+  datanum[,i] <- as.numeric(datanum[,i])
+}
+char.index <- c(4,9,28:35)
+for (i in char.index){
+  datanum[,i] <- as.factor(datanum[,i])
+  datanum[,i] <- as.numeric(datanum[,i])
+}
+```
+
+
+```{r}
+# Data type conversion to numeric type
+data1num <- data1
+num.index <- c(1:3,5:8,10:26,35:40)
+for (i in num.index){
+  data1num[,i] <- as.numeric(data1num[,i])
+}
+char.index <- c(4,9,27:34)
+for (i in char.index){
+  data1num[,i] <- as.factor(data1num[,i])
+  data1num[,i] <- as.numeric(data1num[,i])
+}
+```
+
+```{r}
+library(caret)
+set.seed(0828)
+split1 = createDataPartition(y= datanum$price,p = 0.8,list = F,groups = 100)
+train1 = datanum[split1,]
+test1 =  datanum[-split1,]
+```
+
+
+
+```{r}
+#install.packages("gbm")
+library(gbm)
+set.seed(828)
+boost = gbm(price~.,
+            data=train1,
+            distribution="gaussian",
+            n.trees = 500,
+            interaction.depth = 2,
+            shrinkage = 0.01)
+pred_train = predict(boost, n.trees=500)
+rmse_train_boost = sqrt(mean((pred_train - train1$price)^2)); rmse_train_boost
+pred_boost = predict(boost, newdata = scoring)
+rmse_boost = sqrt(mean((pred_boost - train1$price)^2)); rmse_boost
+```
+```{r}
+submissionFile = data.frame(id = scoring$id, price = pred_boost)
+write.csv(submissionFile, 'sample_submissionboost.csv',row.names = F)
+```
+
+##tuned gbm
+```{r}
+library(caret)
+set.seed(0828)
+trControl = trainControl(method="cv",number=5)
+tuneGrid = expand.grid(n.trees = 500, 
+                       interaction.depth = c(1,2,3),
+                       shrinkage = (1:100)*0.001,
+                       n.minobsinnode=c(5,10,15))
+garbage = capture.output(cvModel <- train(price~.,
+                                          data=train,
+                                          method="gbm",
+                                          trControl=trControl, 
+                                          tuneGrid=tuneGrid))
+set.seed(0828)
+cvboost = gbm(price~.,
+              data=train,
+              distribution="gaussian",
+              n.trees=500,
+              interaction.depth=cvModel$bestTune$interaction.depth,
+              shrinkage=cvModel$bestTune$shrinkage,
+              n.minobsinnode = cvModel$bestTune$n.minobsinnode)
+```
+
+
+##xgboost
+
+
+
+```{r}
+#install.packages("xgboost")
+#install.packages("vtreat")
+library(vtreat)
+trt = designTreatmentsZ(dframe = train1,
+                        varlist = names(train1)[-10])
+newvars = trt$scoreFrame[trt$scoreFrame$code%in% c('clean','lev'),'varName']
+
+train_input = prepare(treatmentplan = trt, 
+                      dframe = train1,
+                      varRestriction = newvars)
+test_input = prepare(treatmentplan = trt, 
+                     dframe = test1,
+                     varRestriction = newvars)
+head(train_input)
+```
+
+
+```{r}
+library(xgboost); library(caret)
+set.seed(0828)
+tune_nrounds = xgb.cv(data=as.matrix(train_input), 
+                      label = train1$price,
+                      nrounds=250,
+                      nfold = 5,
+                      verbose = 0)
+
+ggplot(data=tune_nrounds$evaluation_log, aes(x=iter, y=test_rmse_mean))+
+  geom_point(size=0.4, color='sienna')+
+  geom_line(size=0.1, alpha=0.1)+
+  theme_bw()
+which.min(tune_nrounds$evaluation_log$test_rmse_mean)
+```
+
+```{r}
+#install.packages("xgboost")
+library(xgboost)
+xgboost = xgboost(data=as.matrix(train_input), 
+                  label = train1$price,
+                  nrounds=48,
+                  verbose = 0)
+```
+
+```{r}
+predxgboost = predict(xgboost, newdata=as.matrix(data1num))
+rmse_xgboost = sqrt(mean((predxgboost - train1$price)^2))
+rmse_xgboost
+```
+
+
+```{r}
+submissionFile = data.frame(id = scoring$id, price = predxgboost)
+write.csv(submissionFile, 'sample_submissionxgboost.csv',row.names = F)
+```
+
+
+##Random Forest
+
+```{r}
+library(randomForest)
+set.seed(0828)
+forest = randomForest(price~.,data=train1,ntree = 1000)
+pred_forest = predict(forest,newdata=data1num)
+rmse_forest = sqrt(mean((pred_forest-train1$price)^2)); rmse_forest
+```
+```{r}
+varImpPlot(forest)
+```
+
+
+```{r}
+submissionFile = data.frame(id = scoring$id, price = pred_forest)
+write.csv(submissionFile, 'sample_submissionforest.csv',row.names = F)
+```
+
+##Tuned Random Forest with ranger
+
+```{r}
+#install.packages("randomForest")
+#install.packages("Rcpp")
+library(Rcpp)
+library(randomForest)
+#install.packages("ranger")
+library(ranger)
+trControl=trainControl(method="cv",number=5)
+tuneGrid = expand.grid(mtry=1:4, 
+                       splitrule = c('variance','extratrees','maxstat'), 
+                       min.node.size = c(2,5,10,15,20,25))
+set.seed(617)
+cvModel = train(price~.,
+                data=train1,
+                method="ranger",
+                num.trees=1000,
+                trControl=trControl,
+                tuneGrid=tuneGrid)
+cvModel
+cv_forest_ranger = ranger(price~.,
+                          data=train1,
+                          num.trees = 1000, 
+                          mtry=cvModel$bestTune$mtry, 
+                          min.node.size = cvModel$bestTune$min.node.size, 
+                          splitrule = cvModel$bestTune$splitrule)
+pred_test_ranger = predict(cv_forest_ranger, data =test1, num.trees = 1000)
+rmse_cv_forest_ranger = sqrt(mean((predranger$predictions-test$price)^2)); rmse_cv_forest_ranger
+```
+
+
+```{r}
+predranger = predict(cv_forest_ranger, newdata=data1num)
+```
+
+
+```{r}
+submissionFile = data.frame(id = scoring$id, price = predranger)
+write.csv(submissionFile, 'sample_submissionranger.csv',row.names = F)
+```
+
+
